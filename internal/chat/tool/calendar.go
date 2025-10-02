@@ -1,11 +1,11 @@
-package assistant
+package tool
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
 
-	"github.com/arran4/golang-ical"
+	ics "github.com/arran4/golang-ical"
 )
 
 func LoadCalendar(ctx context.Context, link string) ([]*ics.VEvent, error) {
