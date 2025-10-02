@@ -92,7 +92,12 @@ func (a *Assistant) Reply(ctx context.Context, conv *model.Conversation) (string
 						"type": "object",
 						"properties": map[string]any{
 							"location": map[string]string{
-								"type": "string",
+								"type":        "string",
+								"description": "City name or location",
+							},
+							"days": map[string]any{
+								"type":        "integer",
+								"description": "Number of forecast days (1-3). Omit for current weather only.",
 							},
 						},
 						"required": []string{"location"},
@@ -142,7 +147,20 @@ func (a *Assistant) Reply(ctx context.Context, conv *model.Conversation) (string
 
 				switch call.Function.Name {
 				case "get_weather":
-					msgs = append(msgs, openai.ToolMessage("weather is fine", call.ID))
+					var args struct {
+						Location string `json:"location"`
+					}
+					if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+						msgs = append(msgs, openai.ToolMessage("Failed to parse location", call.ID))
+						break
+					}
+
+					weatherClient := NewWeatherClient()
+					weather, err := weatherClient.GetCurrentWeather(ctx, args.Location)
+					if err != nil {
+						slog.ErrorContext(ctx, "Weather API error", "error", err, "location", args.Location)
+					}
+					msgs = append(msgs, openai.ToolMessage(weather, call.ID))
 				case "get_today_date":
 					msgs = append(msgs, openai.ToolMessage(time.Now().Format(time.RFC3339), call.ID))
 				case "get_holidays":
