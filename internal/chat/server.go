@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/acai-travel/tech-challenge/internal/chat/model"
@@ -47,24 +48,63 @@ func (s *Server) StartConversation(ctx context.Context, req *pb.StartConversatio
 		return nil, twirp.RequiredArgumentError("message")
 	}
 
-	// choose a title
-	title, err := s.assist.Title(ctx, conversation)
-	if err != nil {
-		slog.ErrorContext(ctx, "Failed to generate conversation title", "error", err)
+	// lets paralellize title and reply generation
+	// channels to receive results
+	titleChan := make(chan struct {
+		title string
+		err   error
+	}, 1)
+
+	replyChan := make(chan struct {
+		reply string
+		err   error
+	}, 1)
+
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func(ctx context.Context, convo *model.Conversation) {
+		defer wg.Done()
+		// choose a title
+		title, err := s.assist.Title(ctx, conversation)
+		titleChan <- struct {
+			title string
+			err   error
+		}{title: title, err: err}
+	}(ctx, conversation)
+
+	wg.Add(1)
+	go func(ctx context.Context, convo *model.Conversation) {
+		defer wg.Done()
+		// generate a reply
+		reply, err := s.assist.Reply(ctx, conversation)
+		replyChan <- struct {
+			reply string
+			err   error
+		}{reply: reply, err: err}
+	}(ctx, conversation)
+
+	wg.Wait()
+
+	// Read results from channels
+	titleResult := <-titleChan
+	replyResult := <-replyChan
+
+	// Handle results
+	if titleResult.err != nil {
+		slog.ErrorContext(ctx, "Failed to generate conversation title", "error", titleResult.err)
 	} else {
-		conversation.Title = title
+		conversation.Title = titleResult.title
 	}
 
-	// generate a reply
-	reply, err := s.assist.Reply(ctx, conversation)
-	if err != nil {
-		return nil, err
+	if replyResult.err != nil {
+		return nil, replyResult.err
 	}
 
 	conversation.Messages = append(conversation.Messages, &model.Message{
 		ID:        primitive.NewObjectID(),
 		Role:      model.RoleAssistant,
-		Content:   reply,
+		Content:   replyResult.reply,
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	})
@@ -76,7 +116,7 @@ func (s *Server) StartConversation(ctx context.Context, req *pb.StartConversatio
 	return &pb.StartConversationResponse{
 		ConversationId: conversation.ID.Hex(),
 		Title:          conversation.Title,
-		Reply:          reply,
+		Reply:          replyResult.reply,
 	}, nil
 }
 
